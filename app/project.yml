@@ -1,0 +1,35 @@
+name: SkyViewControl
+options:
+  bundleIdPrefix: com.notnotjake
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+targets:
+  SkyViewControl:
+    type: application
+    platform: iOS
+    sources: [SkyViewControl]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.notnotjake.SkyViewControl
+        DEVELOPMENT_TEAM: 4XRBD4BK9D
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: SkyView
+        TARGETED_DEVICE_FAMILY: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        SWIFT_VERSION: "6.0"
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+
+schemes:
+  SkyViewControl:
+    build:
+      targets:
+        SkyViewControl: all
+    run:
+      config: Debug
+    archive:
+      config: Release

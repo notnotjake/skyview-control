@@ -16,3 +16,10 @@ work/tuya-data/tuya-raw.json
 work/tuya-data/snapshot.json
 work/tuya-data/captures/
 work/tuya-data/dps51-events.jsonl
+
+# dinggy build state (machine-specific config, DerivedData, logs).
+.dinggy/
+
+# Xcode user state.
+*.xcuserdata/
+**/xcuserdata/
