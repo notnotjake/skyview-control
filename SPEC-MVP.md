@@ -131,21 +131,18 @@ Implementation notes:
 
 ## railway.json (repo root)
 
-Config-as-code for the relay service, deploying from the repo root so `install.sh` is available:
+Config-as-code for the relay service. Builds via `relay.Dockerfile` at the repo root (Nixpacks can't detect Bun without a root package.json), which copies `relay/` plus the repo-root `install.sh` so the relay can serve it:
 
 ```json
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "build": { "builder": "NIXPACKS", "buildCommand": "bun install --cwd relay" },
+  "build": { "builder": "DOCKERFILE", "dockerfilePath": "relay.Dockerfile" },
   "deploy": {
-    "startCommand": "bun run relay/src/index.ts",
     "healthcheckPath": "/healthz",
     "restartPolicyType": "ON_FAILURE"
   }
 }
 ```
-
-(Exact builder details may be adjusted during deploy; keep the healthcheck path and start command stable.)
 
 ## install.sh
 
