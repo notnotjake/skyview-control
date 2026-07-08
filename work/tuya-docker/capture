@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "Usage: work/tuya-docker/capture LABEL [IP]" >&2
+  exit 2
+fi
+
+label="$1"
+ip="${2:-}"
+safe_label="$(printf "%s" "$label" | tr -c 'A-Za-z0-9._-' '_')"
+timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+out_dir="work/tuya-data/captures"
+out_file="$out_dir/${timestamp}_${safe_label}.json"
+
+mkdir -p "$out_dir"
+
+if [ -n "$ip" ]; then
+  work/tuya-docker/status "$ip" > "$out_file"
+else
+  work/tuya-docker/status > "$out_file"
+fi
+
+echo "$out_file"

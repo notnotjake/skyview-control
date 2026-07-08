@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "Usage: work/tuya-docker/preset relaxing|working|reading|sleeping|daytime-break [IP]" >&2
+  exit 2
+fi
+
+preset="$1"
+ip="${2:-}"
+
+case "$preset" in
+  working)
+    dps51="Ah8D6APoA+gD6APo"
+    ;;
+  reading)
+    dps51="AhwAAAAAA+gD6APo"
+    ;;
+  relaxing)
+    dps51="AggAAAAAAAAD6AAA"
+    ;;
+  sleeping)
+    dps51="AhAAAAAAAAAAAAPo"
+    ;;
+  daytime-break)
+    dps51="AhwAAAAAAMgDIAJY"
+    ;;
+  *)
+    echo "Unknown preset: $preset" >&2
+    echo "Expected: relaxing, working, reading, sleeping, or daytime-break" >&2
+    exit 2
+    ;;
+esac
+
+if [ -n "$ip" ]; then
+  work/tuya-docker/set-dps 21 colour "$ip" >/dev/null
+  work/tuya-docker/set-dps 22 1000 "$ip" >/dev/null
+  work/tuya-docker/set-dps 51 "$dps51" "$ip"
+else
+  work/tuya-docker/set-dps 21 colour >/dev/null
+  work/tuya-docker/set-dps 22 1000 >/dev/null
+  work/tuya-docker/set-dps 51 "$dps51"
+fi

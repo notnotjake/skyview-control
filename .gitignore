@@ -1,0 +1,18 @@
+.DS_Store
+
+# Local dev secrets (relay/bridge tokens, lamp key).
+.env
+.env.*
+relay/.env
+bridge/.env
+node_modules/
+
+# Tuya credentials and local device secrets.
+work/tuya-data/.env
+
+# Generated/local discovery output.
+work/tuya-data/devices.json
+work/tuya-data/tuya-raw.json
+work/tuya-data/snapshot.json
+work/tuya-data/captures/
+work/tuya-data/dps51-events.jsonl

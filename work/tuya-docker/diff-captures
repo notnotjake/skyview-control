@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: work/tuya-docker/diff-captures BEFORE.json AFTER.json" >&2
+  exit 2
+fi
+
+python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+before_path, after_path = sys.argv[1:3]
+
+with open(before_path) as f:
+    before = json.load(f).get("dps", {})
+
+with open(after_path) as f:
+    after = json.load(f).get("dps", {})
+
+for key in sorted(set(before) | set(after), key=lambda value: int(value) if value.isdigit() else value):
+    if before.get(key) != after.get(key):
+        print(f"{key}: {before.get(key)!r} -> {after.get(key)!r}")
+PY

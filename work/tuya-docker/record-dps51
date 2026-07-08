@@ -1,0 +1,46 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -lt 2 ]; then
+  echo "Usage: work/tuya-docker/record-dps51 LABEL PAYLOAD [NOTES...]" >&2
+  exit 2
+fi
+
+label="$1"
+payload="$2"
+shift 2
+notes="$*"
+
+mkdir -p work/tuya-data
+
+python3 - "$label" "$payload" "$notes" <<'PY'
+import base64
+import datetime as dt
+import json
+import struct
+import sys
+from pathlib import Path
+
+label, payload, notes = sys.argv[1:4]
+raw = base64.b64decode(payload, validate=True)
+record = {
+    "label": label,
+    "payload": payload,
+    "hex": raw.hex(),
+    "length": len(raw),
+    "notes": notes,
+    "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+}
+
+if len(raw) == 12:
+    record["mode"] = raw[0]
+    record["preset"] = raw[1]
+    record["fields"] = list(struct.unpack(">5H", raw[2:]))
+
+path = Path("work/tuya-data/dps51-samples.jsonl")
+with path.open("a") as file:
+    file.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+print(path)
+print(json.dumps(record, indent=2))
+PY

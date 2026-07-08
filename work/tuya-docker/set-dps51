@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -lt 7 ] || [ "$#" -gt 8 ]; then
+  echo "Usage: work/tuya-docker/set-dps51 MODE PRESET F1 F2 F3 F4 F5 [IP]" >&2
+  echo "Example: work/tuya-docker/set-dps51 2 16 0 0 0 0 1000 192.168.100.191" >&2
+  exit 2
+fi
+
+mode="$1"
+preset="$2"
+f1="$3"
+f2="$4"
+f3="$5"
+f4="$6"
+f5="$7"
+ip="${8:-}"
+
+payload="$(work/tuya-docker/dps51 encode "$mode" "$preset" "$f1" "$f2" "$f3" "$f4" "$f5")"
+
+if [ -n "$ip" ]; then
+  work/tuya-docker/set-dps 21 colour "$ip" >/dev/null
+  work/tuya-docker/set-dps 51 "$payload" "$ip"
+else
+  work/tuya-docker/set-dps 21 colour >/dev/null
+  work/tuya-docker/set-dps 51 "$payload"
+fi

@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+set -eu
+
+env_file="${TUYA_ENV_FILE:-work/tuya-data/.env}"
+if [ ! -f "$env_file" ]; then
+  echo "Missing env file: $env_file" >&2
+  exit 1
+fi
+
+ip="${1:-}"
+log_name="${2:-dps51-events.jsonl}"
+
+mkdir -p work/tuya-data
+
+exec docker --context "${DOCKER_CONTEXT:-default}" run --rm -it \
+  --env-file "$env_file" \
+  -e TUYA_OVERRIDE_IP="$ip" \
+  -e TUYA_DPS51_LOG="/data/$log_name" \
+  -v "$PWD/work/tuya-data:/data" \
+  -v "$PWD/work/tuya-docker:/tools:ro" \
+  --entrypoint python \
+  skyview-tuya \
+  /tools/monitor_dps51.py

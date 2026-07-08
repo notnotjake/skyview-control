@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+set -eu
+
+env_file="${TUYA_ENV_FILE:-work/tuya-data/.env}"
+
+if [ ! -f "$env_file" ]; then
+  echo "Missing env file: $env_file" >&2
+  exit 1
+fi
+
+mkdir -p work/tuya-data
+
+tty_flags="-i"
+if [ -t 0 ]; then
+  tty_flags="-it"
+fi
+
+exec docker --context "${DOCKER_CONTEXT:-default}" run --rm $tty_flags \
+  --env-file "$env_file" \
+  -v "$PWD/work/tuya-data:/data" \
+  --entrypoint sh \
+  skyview-tuya \
+  -c '
+    strip_quotes() {
+      value="$1"
+      value="${value#\"}"
+      value="${value%\"}"
+      value="${value#\047}"
+      value="${value%\047}"
+      printf "%s" "$value"
+    }
+
+    access_id="$(strip_quotes "$TUYA_ACCESS_ID")"
+    access_secret="$(strip_quotes "$TUYA_ACCESS_SECRET")"
+    region="$(strip_quotes "$TUYA_REGION")"
+    device_id="$(strip_quotes "$TUYA_DEVICE_ID")"
+
+    python -m tinytuya wizard -nocolor -yes -no-poll \
+      -key "$access_id" \
+      -secret "$access_secret" \
+      -region "$region" \
+      -device "$device_id"
+  '

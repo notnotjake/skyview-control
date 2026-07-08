@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+import argparse
+import base64
+import binascii
+import struct
+
+
+def decode(value: str) -> bytes:
+    try:
+        return base64.b64decode(value, validate=True)
+    except binascii.Error as error:
+        raise SystemExit(f"Invalid base64 payload: {error}") from error
+
+
+def encode(mode: int, preset: int, fields: list[int]) -> str:
+    if len(fields) != 5:
+        raise SystemExit("DPS 51 payload needs exactly five 16-bit fields")
+
+    values = [mode, preset, *fields]
+    for value in values[:2]:
+        if not 0 <= value <= 255:
+            raise SystemExit("mode and preset must fit in one byte: 0-255")
+    for value in fields:
+        if not 0 <= value <= 65535:
+            raise SystemExit("field values must fit in two bytes: 0-65535")
+
+    raw = bytes([mode, preset]) + struct.pack(">5H", *fields)
+    return base64.b64encode(raw).decode("ascii")
+
+
+def command_decode(args: argparse.Namespace) -> None:
+    raw = decode(args.payload)
+    print(f"base64: {args.payload}")
+    print(f"hex:    {raw.hex()}")
+    print(f"len:    {len(raw)}")
+
+    if len(raw) == 12:
+        mode = raw[0]
+        preset = raw[1]
+        fields = struct.unpack(">5H", raw[2:])
+        print(f"shape:  mode/u8={mode}, preset/u8={preset}, fields/u16={list(fields)}")
+        print("scale:  fields as 0-1000 percentages = " + ", ".join(f"{field / 10:.1f}%" for field in fields))
+    elif len(raw) % 2 == 0:
+        fields = struct.unpack(f">{len(raw) // 2}H", raw)
+        print(f"u16be:  {list(fields)}")
+
+
+def command_encode(args: argparse.Namespace) -> None:
+    print(encode(args.mode, args.preset, args.fields))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Decode/encode SkyView DPS 51 payloads")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    decode_parser = subparsers.add_parser("decode")
+    decode_parser.add_argument("payload")
+    decode_parser.set_defaults(func=command_decode)
+
+    encode_parser = subparsers.add_parser("encode")
+    encode_parser.add_argument("mode", type=int)
+    encode_parser.add_argument("preset", type=int)
+    encode_parser.add_argument("fields", type=int, nargs=5)
+    encode_parser.set_defaults(func=command_encode)
+
+    args = parser.parse_args()
+    args.func(args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

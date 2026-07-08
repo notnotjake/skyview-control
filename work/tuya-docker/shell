@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -eu
+
+env_file="${TUYA_ENV_FILE:-work/tuya-data/.env}"
+if [ ! -f "$env_file" ]; then
+  echo "Missing env file: $env_file" >&2
+  exit 1
+fi
+
+mkdir -p work/tuya-data
+
+exec docker --context "${DOCKER_CONTEXT:-default}" run --rm -it \
+  --env-file "$env_file" \
+  -v "$PWD/work/tuya-data:/data" \
+  --entrypoint sh \
+  skyview-tuya

@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+mkdir -p work/tuya-data
+
+tty_flags="-i"
+if [ -t 0 ]; then
+  tty_flags="-it"
+fi
+
+exec docker --context "${DOCKER_CONTEXT:-default}" run --rm $tty_flags \
+  -v "$PWD/work/tuya-data:/data" \
+  skyview-tuya "$@"

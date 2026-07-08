@@ -1,0 +1,54 @@
+#!/usr/bin/env sh
+set -eu
+
+env_file="${TUYA_ENV_FILE:-work/tuya-data/.env}"
+if [ ! -f "$env_file" ]; then
+  echo "Missing env file: $env_file" >&2
+  exit 1
+fi
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "Usage: work/tuya-docker/set-dps DPS VALUE [IP]" >&2
+  exit 2
+fi
+
+dps="$1"
+value="$2"
+ip="${3:-}"
+
+mkdir -p work/tuya-data
+
+exec docker --context "${DOCKER_CONTEXT:-default}" run --rm -i \
+  --env-file "$env_file" \
+  -e TUYA_DPS="$dps" \
+  -e TUYA_VALUE="$value" \
+  -e TUYA_OVERRIDE_IP="$ip" \
+  -v "$PWD/work/tuya-data:/data" \
+  --entrypoint sh \
+  skyview-tuya \
+  -c '
+    strip_quotes() {
+      value="$1"
+      value="${value#\"}"
+      value="${value%\"}"
+      value="${value#\047}"
+      value="${value%\047}"
+      printf "%s" "$value"
+    }
+
+    device_id="$(strip_quotes "$TUYA_DEVICE_ID")"
+    device_ip="$(strip_quotes "${TUYA_DEVICE_IP:-}")"
+    version="$(strip_quotes "${TUYA_VERSION:-3.4}")"
+    override_ip="$(strip_quotes "${TUYA_OVERRIDE_IP:-}")"
+
+    if [ -n "$override_ip" ]; then
+      device_ip="$override_ip"
+    fi
+
+    python -m tinytuya set \
+      --id "$device_id" \
+      --ip "$device_ip" \
+      --version "$version" \
+      --dps "$TUYA_DPS" \
+      --value "$TUYA_VALUE"
+  '

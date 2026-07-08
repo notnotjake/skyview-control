@@ -1,0 +1,13 @@
+{
+  "name": "skyview-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch run src/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.12.28"
+  }
+}
