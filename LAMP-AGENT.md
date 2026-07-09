@@ -6,7 +6,10 @@ You can control a lamp through a simple HTTP API. Follow these instructions exac
 
 - Base URL: `https://relay-production-ce8a.up.railway.app`
 - Every request needs this header: `Authorization: Bearer <API_TOKEN>`
-- The API token will be provided to you. Never print it back to the user.
+- The API token is usually available as `API_TOKEN` in the project root `.env`.
+- Never print the API token back to the user.
+- Do not `source .env`; it may contain values that are not shell-parseable. Extract only `API_TOKEN` when making requests.
+- In Codex, outbound network access may require approval before `curl` can reach the relay.
 
 ## Set the lamp to specific values
 
@@ -20,8 +23,10 @@ The lamp has four color channels. Each is an integer from `0` (off) to `1000` (f
 Send only the channels you want on; any channel you omit is set to 0.
 
 ```sh
-curl -X POST https://relay-production-ce8a.up.railway.app/api/lamp/mix \
-  -H "Authorization: Bearer <API_TOKEN>" \
+API_TOKEN=$(awk -F= '/^API_TOKEN=/{sub(/^API_TOKEN=/,""); gsub(/^"|"$/,""); print; exit}' .env)
+
+curl -sS -X POST https://relay-production-ce8a.up.railway.app/api/lamp/mix \
+  -H "Authorization: Bearer ${API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"warm": 551, "red": 357}'
 ```
@@ -46,8 +51,10 @@ For dimmer versions of a preset, scale all its values down proportionally (e.g. 
 ## Check lamp status
 
 ```sh
-curl https://relay-production-ce8a.up.railway.app/api/status \
-  -H "Authorization: Bearer <API_TOKEN>"
+API_TOKEN=$(awk -F= '/^API_TOKEN=/{sub(/^API_TOKEN=/,""); gsub(/^"|"$/,""); print; exit}' .env)
+
+curl -sS https://relay-production-ce8a.up.railway.app/api/status \
+  -H "Authorization: Bearer ${API_TOKEN}"
 ```
 
 Response fields: `bridgeConnected` (the home bridge is online), `lampReachable` (the lamp responds), `lastHeartbeatAt`.
