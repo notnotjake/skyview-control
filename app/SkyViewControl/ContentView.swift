@@ -4,8 +4,11 @@ struct ContentView: View {
     @State private var isLampOn = true
     @State private var showingDevicePicker = false
     @State private var showingSettings = false
+    @State private var showingScheduleEditor = false
+    @State private var scheduleStore = LampScheduleStore()
     @State private var sunProvider = SunScheduleProvider()
     @State private var locationProvider = LocationProvider()
+    @State private var focusedTimelineEvent: FocusedTimelineEvent?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -22,26 +25,22 @@ struct ContentView: View {
                     HStack {
                         glassIconButton("bed.double.fill") {}
                         Spacer()
-                        glassIconButton("deskclock") {}
+                        glassIconButton("deskclock") {
+                            showingScheduleEditor = true
+                        }
                     }
+                    .overlay(alignment: .bottom) { timelineEventCallout }
                     .padding(.horizontal, 20)
 
-                    DayNightTimelineView(schedule: sunProvider.schedule, chips: [
-                        TimelineChipItem(
-                            minuteOfDay: 6 * 60 + 30,
-                            icon: "sunrise.fill",
-                            iconColor: .yellow,
-                            iconSymbolColor: .black.opacity(0.75),
-                            label: "Wake"
-                        ),
-                        TimelineChipItem(
-                            minuteOfDay: 22 * 60 + 30,
-                            icon: "bed.double.fill",
-                            iconColor: .purple,
-                            iconSymbolColor: .white,
-                            label: "Bedtime"
-                        ),
-                    ])
+                    DayNightTimelineView(
+                        schedule: sunProvider.schedule,
+                        events: scheduleStore.all.map(TimelineEventItem.init),
+                        onFocusedEventChange: { event in
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+                                focusedTimelineEvent = event
+                            }
+                        }
+                    )
                 }
 
                 Spacer()
@@ -62,9 +61,50 @@ struct ContentView: View {
                 .presentationDetents([.medium])
                 .preferredColorScheme(.dark)
         }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(locationProvider: locationProvider)
+        .sheet(isPresented: $showingScheduleEditor) {
+            ScheduleEditorView(store: scheduleStore)
+                .presentationDetents([.medium, .large])
                 .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(
+                locationProvider: locationProvider,
+                sunProvider: sunProvider
+            )
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    /// Name and precise time of the event the timeline loupe is over,
+    /// centered between the two schedule buttons. The timeline is a later
+    /// sibling, so the offset transition sinks the label down behind it —
+    /// it reads as popping up out of the timeline.
+    @ViewBuilder
+    private var timelineEventCallout: some View {
+        if let event = focusedTimelineEvent {
+            let minuteOfDay = Int(event.minuteOfDay.rounded()) % 1440
+            let hour = minuteOfDay / 60
+            let hour12 = hour % 12 == 0 ? 12 : hour % 12
+
+            HStack(alignment: .lastTextBaseline, spacing: 7) {
+                Text(event.name)
+                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                    Text("\(hour12):\(String(format: "%02d", minuteOfDay % 60))")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                    Text(hour < 12 ? "AM" : "PM")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(.secondary)
+            }
+            // Ideal-size layout: the transition's animated frame otherwise
+            // truncates the text mid-flight.
+            .fixedSize()
+            .id(event.name)
+            .transition(.offset(y: 26).combined(with: .opacity))
+            .allowsHitTesting(false)
         }
     }
 

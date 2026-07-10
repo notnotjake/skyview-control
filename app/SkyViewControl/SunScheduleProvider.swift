@@ -8,23 +8,53 @@ import WeatherKit
 @MainActor
 @Observable
 final class SunScheduleProvider {
+    enum Source: Equatable {
+        case placeholder
+        case weatherKit
+        case weatherKitFallback
+
+        var label: String {
+            switch self {
+            case .placeholder: "Placeholder"
+            case .weatherKit: "WeatherKit"
+            case .weatherKitFallback: "WeatherKit (fallback)"
+            }
+        }
+    }
+
     /// Used until the user grants location access at least once.
     static let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
 
     private(set) var schedule: SunSchedule = .placeholder
+    private(set) var source: Source = .placeholder
+    private(set) var scheduleLocation: CLLocation?
+    private(set) var lastUpdated: Date?
+    private(set) var errorMessage: String?
+    private(set) var isLoading = false
 
     func refresh(at location: CLLocation?) async {
+        let requestedLocation = location ?? Self.fallbackLocation
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
         do {
             let forecast = try await WeatherService.shared.weather(
-                for: location ?? Self.fallbackLocation,
+                for: requestedLocation,
                 including: .daily
             )
             let today = forecast.first { Calendar.current.isDateInToday($0.date) }
             if let sun = (today ?? forecast.first)?.sun,
                let schedule = SunSchedule(sunEvents: sun) {
                 self.schedule = schedule
+                source = location == nil ? .weatherKitFallback : .weatherKit
+                scheduleLocation = requestedLocation
+                lastUpdated = .now
+            } else {
+                errorMessage = "WeatherKit returned no usable sun events."
             }
         } catch {
+            errorMessage = error.localizedDescription
             print("WeatherKit refresh failed: \(error)")
         }
     }
