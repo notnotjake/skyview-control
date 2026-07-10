@@ -1,39 +1,106 @@
 import SwiftUI
-
 /// A schedule moment (wake/bedtime chip or sun event) the loupe is over.
 struct FocusedTimelineEvent: Equatable {
     var name: String
     var minuteOfDay: Double
 }
 
+/// A programmatic scroll request for `DayNightTimelineView`. Bump
+/// `generation` to fire; the view animates the requested time to the
+/// viewport center. Applied on change, or at first layout when the view is
+/// created with one already set.
+struct TimelineScrollCommand: Equatable {
+    var generation = 0
+    /// Minute of day to center, or nil for the current time.
+    var minuteOfDay: Double? = nil
+    /// Set when the command rides a zoom/width change in the same
+    /// transaction. A one-shot scrollTo loses the race against an
+    /// in-flight resize (the layout pass clobbers it), so these commands
+    /// instead track the live geometry frame by frame until the target
+    /// time is centered — a clobbered frame is simply retried on the next.
+    var tracksResize = false
+}
+
+/// One self-consistent scroll geometry snapshot: offset, content size and
+/// viewport measured together, so mid-resize math never mixes scales.
+private struct ScrollMetrics: Equatable {
+    var offset: CGFloat = 0
+    var contentWidth: CGFloat = 0
+    var containerWidth: CGFloat = 0
+}
+
 /// Horizontally scrolling day/night timeline, shaded by the sun schedule,
 /// with hour ticks across the band, labels every other hour, a liquid-glass
 /// "now" marker, and scheduled-event chips pinned at their times.
 ///
-/// Infinite scroll works Mario-64-staircase style: the strip is a ~100-day
+/// Infinite scroll works Mario-64-staircase style: the strip is a 20-day
 /// buffer, and whenever the scroll offset drifts within two days of either
 /// end it is teleported back toward the middle by an exact multiple of one
 /// day's width. Every copy of the day is "today", so the jump is invisible
 /// and the marker/chips repeat in each copy.
 ///
-/// The lazy unit is one full day, so decorations that spill past an hour
-/// (chips, the marker) aren't culled until the whole day leaves the screen.
+/// The strip is deliberately a plain HStack, not a lazy one: all the
+/// offset↔time math assumes day k starts at exactly k × dayWidth, and a
+/// lazy stack breaks that whenever `zoom` changes at runtime — offscreen
+/// cells keep stale sizes and unmaterialized ones are estimated, leaving a
+/// mixed-scale grid that desyncs the centered-time readout from the
+/// rendered strip. Twenty eager day cells are cheap; a uniform grid is
+/// what the math needs.
 struct DayNightTimelineView: View {
     var schedule: SunSchedule = .placeholder
     var events: [TimelineEventItem] = []
+    /// Hides the center loupe while a mode that doesn't scrub is up.
+    var showsLoupe = true
+    /// The small time readout under the loupe. The split halves hide it —
+    /// they surface their centered time in the big labels below instead.
+    var showsFocusedTime = true
+    /// Tints the loupe's glass; the split halves color-code themselves.
+    var loupeTint: Color? = nil
+    /// Snapping to now fights modes where the center picks another time.
+    var snapsToNow = true
+    /// Which sides get the dimming edge fade. A split half only fades its
+    /// device edge, not the one meeting the divider.
+    var fadedEdges: HorizontalEdge.Set = [.leading, .trailing]
+    /// Multiplies the hour width; the split halves zoom in for finer
+    /// scrubbing. Animating this animates the strip's scale, and any
+    /// scroll command issued in the same transaction targets the new
+    /// scale — landing in a neighboring day copy at worst, which is
+    /// invisible since every copy is today.
+    var zoom: CGFloat = 1
+    /// Granularity of the centered time: reported minutes round to this,
+    /// and scrolls settle on its grid. The split halves pick in 5s.
+    var minuteStep = 1
+    var scrollCommand: TimelineScrollCommand? = nil
     var onFocusedEventChange: (FocusedTimelineEvent?) -> Void = { _ in }
+    /// Reports the minute of day at the viewport center as it changes —
+    /// how the split halves feed the times they're picking.
+    var onCenteredMinuteChange: ((Int) -> Void)? = nil
 
     /// How close (in minutes) the loupe must be to an event to count as
     /// over it. ~14 min covers the loupe's own width plus a little grace.
     private static let eventGraceMinutes = 14.0
 
-    private static let hourWidth: CGFloat = 44
+    private static let baseHourWidth: CGFloat = 44
     private static let bandHeight: CGFloat = 72
     private static let labelHeight: CGFloat = 26
     private static let labelOverlap: CGFloat = 6
     private static let headroom: CGFloat = 6
-    private static let dayWidth = hourWidth * 24
-    private static let dayRange = -50 ..< 50
+    private static let dayRange = -10 ..< 10
+
+    private var hourWidth: CGFloat { Self.baseHourWidth * zoom }
+    private var dayWidth: CGFloat { hourWidth * 24 }
+
+    /// The strip's measured scale — equal to `dayWidth` at rest, truthful
+    /// mid-resize when the declared zoom hasn't reached the layout yet.
+    private var liveDayWidth: CGFloat {
+        metrics.contentWidth > 0
+            ? metrics.contentWidth / CGFloat(Self.dayRange.count)
+            : dayWidth
+    }
+
+    private var liveViewportWidth: CGFloat {
+        metrics.containerWidth > 0 ? metrics.containerWidth : viewportWidth
+    }
 
     @State private var position = ScrollPosition()
     @State private var hasCentered = false
@@ -45,11 +112,19 @@ struct DayNightTimelineView: View {
     @State private var focusedEvent: FocusedTimelineEvent?
     @State private var hapticDetent = 0
     @State private var snapHaptic = 0
+    @State private var snapHapticArmed = false
     @State private var isSnappedToNow = false
     @State private var isSnappingToNow = false
     @State private var userGestureIsActive = false
     @State private var snapAllowedForGesture = false
     @State private var gestureStartOffset: CGFloat = 0
+    /// A command's animated scroll is running: hold off the infinite-strip
+    /// teleports, whose raw scrollTo would cancel the animation.
+    @State private var scrollCommandInFlight = false
+    @State private var metrics = ScrollMetrics()
+    /// Target minute a resize-riding command is converging on; driven a
+    /// step per geometry frame until it lands.
+    @State private var trackedMinute: Double?
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -57,12 +132,12 @@ struct DayNightTimelineView: View {
                 Calendar.current.startOfDay(for: context.date)
             ) / 60
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 0) {
+                HStack(spacing: 0) {
                     ForEach(Self.dayRange, id: \.self) { dayIndex in
                         DayCell(
                             events: events,
                             schedule: schedule,
-                            hourWidth: Self.hourWidth,
+                            hourWidth: hourWidth,
                             bandHeight: Self.bandHeight,
                             labelHeight: Self.labelHeight,
                             labelOverlap: Self.labelOverlap,
@@ -77,9 +152,12 @@ struct DayNightTimelineView: View {
             .scrollTargetBehavior(
                 NowSnapBehavior(
                     minuteOfDay: nowMinute,
-                    dayWidth: Self.dayWidth,
+                    dayWidth: dayWidth,
                     threshold: 24,
-                    isEnabled: snapAllowedForGesture,
+                    isEnabled: snapsToNow && snapAllowedForGesture,
+                    stepWidth: minuteStep > 1
+                        ? dayWidth * CGFloat(minuteStep) / 1440
+                        : nil,
                     onSnap: {
                         // The deceleration target just got retargeted onto
                         // now: collapse the loupe during the travel, not
@@ -87,28 +165,124 @@ struct DayNightTimelineView: View {
                         // updateTarget can also run on layout changes.
                         guard userGestureIsActive || scrollPhase == .decelerating
                         else { return }
+                        if !isSnappingToNow { snapHapticArmed = true }
                         isSnappingToNow = true
                         isSnappedToNow = true
                     }
                 )
             )
             .scrollPosition($position)
-            .defaultScrollAnchor(.center)
-            // defaultScrollAnchor lands on the middle of the strip, which is
+            // Anchor the *initial* offset only. The size-change anchor is
+            // deliberately off: it preserves the content's unit midpoint —
+            // midnight of day 0 — so zooming while centered anywhere else
+            // dragged the view. The zoom and width handlers below keep the
+            // centered *time* fixed through resizes instead.
+            .defaultScrollAnchor(.center, for: .initialOffset)
+            // The initial anchor lands on the middle of the strip, which is
             // midnight; nudge once to center on the current time.
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in
+                let previousWidth = viewportWidth
                 viewportWidth = width
-                guard !hasCentered else { return }
-                hasCentered = true
-                let contentWidth = CGFloat(Self.dayRange.count) * Self.dayWidth
-                let centered = (contentWidth - width) / 2
-                isSnappedToNow = true
-                position.scrollTo(x: centered + (nowMinute / 1440) * Self.dayWidth)
+                guard hasCentered else {
+                    hasCentered = true
+                    let contentWidth = CGFloat(Self.dayRange.count) * dayWidth
+                    let centered = (contentWidth - width) / 2
+                    // A command set before first layout picks the starting
+                    // time — a view spawned mid-transition (the split's
+                    // second half) begins life already on its target.
+                    let startMinute = scrollCommand?.minuteOfDay ?? nowMinute
+                    isSnappedToNow = scrollCommand?.minuteOfDay == nil
+                    print("TL birth: width=\(width) dayW=\(dayWidth) startMinute=\(startMinute) scrollTo=\(centered + (startMinute / 1440) * dayWidth)")
+                    position.scrollTo(x: centered + (startMinute / 1440) * dayWidth)
+                    // Born mid-transition: the nudge above can be clobbered
+                    // by the initial anchor or the resize, so keep tracking
+                    // until the target actually holds.
+                    if scrollCommand?.tracksResize == true {
+                        trackedMinute = startMinute
+                    }
+                    return
+                }
+                // Keep the centered time fixed when the viewport resizes.
+                // Skip while a command drives the scroll: its target
+                // already accounts for the final width, and a raw scrollTo
+                // here would cancel the command's animation.
+                if width != previousWidth, previousWidth > 0,
+                   !scrollCommandInFlight, trackedMinute == nil {
+                    position.scrollTo(x: scrollOffset + (previousWidth - width) / 2)
+                }
             }
-            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.x }) { _, x in
+            .onChange(of: zoom) { oldZoom, newZoom in
+                guard hasCentered, oldZoom > 0, newZoom > 0,
+                      oldZoom != newZoom, !scrollCommandInFlight,
+                      trackedMinute == nil else { return }
+                // Rescale the offset about the viewport center so the
+                // centered time stays put while the strip stretches
+                // around it.
+                let centerX = scrollOffset + viewportWidth / 2
+                position.scrollTo(x: centerX * (newZoom / oldZoom) - viewportWidth / 2)
+            }
+            .onChange(of: scrollCommand) { _, command in
+                guard let command, hasCentered else { return }
+                let minute = command.minuteOfDay ?? nowMinute
+                print("TL cmd: gen=\(command.generation) minute=\(minute) tracks=\(command.tracksResize) vpW=\(viewportWidth) offset=\(scrollOffset) dayW=\(dayWidth)")
+                isSnappingToNow = false
+                snapHapticArmed = false
+                isSnappedToNow = command.minuteOfDay == nil
+                if command.tracksResize {
+                    // Converges per geometry frame; see trackingStep.
+                    trackedMinute = minute
+                    return
+                }
+                trackedMinute = nil
+                // At rest a single animated scroll is reliable. Shortest
+                // path: target the copy of the minute nearest the current
+                // center — the strip loops, so that can be opposite the
+                // direction the user last scrolled.
+                let targetX = nowMarkerContentX(minuteOfDay: minute, near: scrollOffset)
+                scrollCommandInFlight = true
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                    position.scrollTo(x: targetX - liveViewportWidth / 2)
+                } completion: {
+                    scrollCommandInFlight = false
+                    print("TL cmd done: gen=\(command.generation) offset=\(scrollOffset) centeredMinute=\(minuteAtViewportCenter(offset: scrollOffset))")
+                }
+            }
+            .onScrollGeometryChange(for: ScrollMetrics.self, of: {
+                ScrollMetrics(
+                    offset: $0.contentOffset.x,
+                    contentWidth: $0.contentSize.width,
+                    containerWidth: $0.containerSize.width
+                )
+            }) { _, m in
+                metrics = m
+                let x = m.offset
                 scrollOffset = x
-                focusedMinute = minuteAtViewportCenter(offset: x)
+                if let target = trackedMinute {
+                    trackingStep(toward: target, metrics: m)
+                }
+                let newMinute = minuteAtViewportCenter(offset: x)
+                if newMinute != focusedMinute {
+                    let previousStepped = steppedMinute(focusedMinute)
+                    focusedMinute = newMinute
+                    let stepped = steppedMinute(newMinute)
+                    if stepped != previousStepped {
+                        onCenteredMinuteChange?(stepped)
+                    }
+                }
                 updateFocusedEvent()
+                // Fire the snap haptic on approach, not on settle: the snap
+                // eases out, so by the time the completion handler (or .idle)
+                // runs the motion has visually finished and the tap reads
+                // late. A few points out, plus the haptic engine's own
+                // latency, lands the tap right as the loupe hits the marker.
+                if snapHapticArmed {
+                    let target = nowMarkerContentX(minuteOfDay: nowMinute, near: x)
+                        - viewportWidth / 2
+                    if abs(x - target) <= 8 {
+                        snapHapticArmed = false
+                        snapHaptic &+= 1
+                    }
+                }
                 // Only a finger-driven move breaks the snap; the offset also
                 // changes while decelerating onto now with the loupe already
                 // collapsing, and that must not re-expand it.
@@ -117,10 +291,14 @@ struct DayNightTimelineView: View {
                    isSnappedToNow {
                     isSnappedToNow = false
                 }
-                let contentWidth = CGFloat(Self.dayRange.count) * Self.dayWidth
-                let margin = Self.dayWidth * 2
-                let recenter = Self.dayWidth * 40
-                if x < margin {
+                let contentWidth = m.contentWidth
+                let margin = liveDayWidth * 2
+                let recenter = liveDayWidth * 8
+                if scrollCommandInFlight || trackedMinute != nil {
+                    // No teleports mid-command: transient out-of-scale
+                    // offsets would trip them and cancel the animation.
+                    centeredHour = hourAtViewportCenter(offset: x)
+                } else if x < margin {
                     let targetX = x + recenter
                     scrollOffset = targetX
                     centeredHour = hourAtViewportCenter(offset: targetX)
@@ -155,13 +333,17 @@ struct DayNightTimelineView: View {
                     // escape without re-snapping; the next drag snaps again.
                     snapAllowedForGesture = !isSnappedToNow
                     isSnappingToNow = false
+                    snapHapticArmed = false
+                    // Grabbing the strip cancels any in-flight command.
+                    scrollCommandInFlight = false
+                    trackedMinute = nil
                 }
                 if newPhase == .interacting, isSnappedToNow {
                     isSnappedToNow = false
                 }
                 if newPhase == .idle, userGestureIsActive {
                     userGestureIsActive = false
-                    if snapAllowedForGesture {
+                    if snapsToNow, snapAllowedForGesture {
                         snapToNowIfClose(
                             minuteOfDay: nowMinute,
                             offset: context.geometry.contentOffset.x
@@ -176,6 +358,8 @@ struct DayNightTimelineView: View {
             .overlay(alignment: .top) {
                 centerLoupe
                     .padding(.top, Self.headroom + 8)
+                    .opacity(showsLoupe ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: showsLoupe)
             }
             .overlay(alignment: .topLeading) {
                 nowMarker(minuteOfDay: nowMinute)
@@ -187,6 +371,8 @@ struct DayNightTimelineView: View {
             .overlay(alignment: .top) {
                 focusedTimeLabel
                     .padding(.top, Self.headroom + Self.bandHeight - Self.labelOverlap)
+                    .opacity(showsFocusedTime ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: showsFocusedTime)
             }
             .overlay(edgeFade)
             .sensoryFeedback(.selection, trigger: hapticDetent)
@@ -197,15 +383,51 @@ struct DayNightTimelineView: View {
         }
     }
 
+    /// One convergence step for a resize-riding command: recompute where
+    /// the target time sits in the *measured* geometry and nudge the
+    /// offset a fraction closer. Runs once per geometry frame — the
+    /// resize's own frames drive it while the layout is animating, and
+    /// each nudge triggers the next frame after that. Ends by pinning
+    /// exactly once the declared scale has landed.
+    private func trackingStep(toward minute: Double, metrics m: ScrollMetrics) {
+        let dayW = m.contentWidth / CGFloat(Self.dayRange.count)
+        guard dayW > 0 else { return }
+        let base = (minute / 1440) * dayW
+        let centerX = m.offset + m.containerWidth / 2
+        let copies = ((centerX - base) / dayW).rounded()
+        let desired = base + copies * dayW - m.containerWidth / 2
+        let delta = desired - m.offset
+        let resizeSettled =
+            abs(m.contentWidth - CGFloat(Self.dayRange.count) * dayWidth) < 0.5
+        // Close out with an exact pin once the strip has its final scale
+        // and we're a hair away. The threshold is generous (8pt) because
+        // sub-pixel nudges don't move the offset, which would stop the
+        // frame stream and strand the tracker just short of its target.
+        if resizeSettled, abs(delta) <= 8 {
+            trackedMinute = nil
+            position.scrollTo(x: desired)
+            print("TL track done: offset=\(desired) minute=\(minute)")
+            return
+        }
+        position.scrollTo(x: m.offset + delta * 0.12)
+    }
+
     private func hourAtViewportCenter(offset: CGFloat) -> Int {
-        Int(floor((offset + viewportWidth / 2) / Self.hourWidth))
+        Int(floor((offset + liveViewportWidth / 2) / (liveDayWidth / 24)))
+    }
+
+    private func steppedMinute(_ minute: Int) -> Int {
+        guard minuteStep > 1 else { return minute }
+        let stepped = (Double(minute) / Double(minuteStep)).rounded()
+            * Double(minuteStep)
+        return Int(stepped) % 1440
     }
 
     private func minuteAtViewportCenter(offset: CGFloat) -> Int {
-        let centerX = offset + viewportWidth / 2
-        let dayX = centerX.truncatingRemainder(dividingBy: Self.dayWidth)
-        let normalizedX = dayX < 0 ? dayX + Self.dayWidth : dayX
-        return Int((normalizedX / Self.dayWidth * 1440).rounded()) % 1440
+        let centerX = offset + liveViewportWidth / 2
+        let dayX = centerX.truncatingRemainder(dividingBy: liveDayWidth)
+        let normalizedX = dayX < 0 ? dayX + liveDayWidth : dayX
+        return Int((normalizedX / liveDayWidth * 1440).rounded()) % 1440
     }
 
     private func updateFocusedEvent() {
@@ -237,10 +459,10 @@ struct DayNightTimelineView: View {
     }
 
     private func nowMarkerContentX(minuteOfDay: Double, near offset: CGFloat) -> CGFloat {
-        let markerX = (minuteOfDay / 1440) * Self.dayWidth
-        let centeredContentX = offset + viewportWidth / 2
-        let nearestDay = ((centeredContentX - markerX) / Self.dayWidth).rounded()
-        return markerX + nearestDay * Self.dayWidth
+        let markerX = (minuteOfDay / 1440) * liveDayWidth
+        let centeredContentX = offset + liveViewportWidth / 2
+        let nearestDay = ((centeredContentX - markerX) / liveDayWidth).rounded()
+        return markerX + nearestDay * liveDayWidth
     }
 
     private func snapToNowIfClose(minuteOfDay: Double, offset: CGFloat) {
@@ -250,6 +472,9 @@ struct DayNightTimelineView: View {
         guard distance <= 24 else { return }
 
         if distance <= 1 {
+            // Only arm if no snap is in flight: a deceleration snap ends
+            // here too, and its approach haptic has already fired.
+            if !isSnappingToNow { snapHapticArmed = true }
             completeNowSnap()
             return
         }
@@ -257,6 +482,7 @@ struct DayNightTimelineView: View {
         isSnappingToNow = true
         // Collapse the loupe alongside the scroll, not after it.
         isSnappedToNow = true
+        snapHapticArmed = true
         withAnimation(.snappy(duration: 0.24)) {
             position.scrollTo(x: targetOffset)
         } completion: {
@@ -268,7 +494,12 @@ struct DayNightTimelineView: View {
     private func completeNowSnap() {
         isSnappingToNow = false
         isSnappedToNow = true
-        snapHaptic &+= 1
+        // Normally the approach check has already fired; this covers the
+        // already-at-target case (distance <= 1, no travel to observe).
+        if snapHapticArmed {
+            snapHapticArmed = false
+            snapHaptic &+= 1
+        }
     }
 
     private func nowMarker(minuteOfDay: Double) -> some View {
@@ -282,6 +513,10 @@ struct DayNightTimelineView: View {
     }
 
     /// A fixed clear-glass lens marking the time at the viewport center.
+    /// Tinted variants run narrower: the colored glass reads heavier than
+    /// the clear ring at the same width.
+    private var loupeWidth: CGFloat { loupeTint == nil ? 18 : 11 }
+
     private var centerLoupe: some View {
         Color.clear
             // Animate the real size rather than scaleEffect: a transform
@@ -289,10 +524,13 @@ struct DayNightTimelineView: View {
             // included), which reads as growing from one side. A true size
             // change lets the glass morph its shape, centered.
             .frame(
-                width: isSnappedToNow ? 5 : 18,
+                width: isSnappedToNow ? 5 : loupeWidth,
                 height: (Self.bandHeight - 16) * (isSnappedToNow ? 0.85 : 1)
             )
-            .glassEffect(.clear, in: .capsule)
+            .glassEffect(
+                loupeTint.map { Glass.clear.tint($0) } ?? .clear,
+                in: .capsule
+            )
             // Cut the clear center back out, leaving a true glass ring.
             .mask {
                 Capsule()
@@ -316,7 +554,7 @@ struct DayNightTimelineView: View {
             // Fixed footprint: the overlay pins the loupe's top edge, so
             // without this the height change would shrink it upward instead
             // of about its center.
-            .frame(width: 18, height: Self.bandHeight - 16)
+            .frame(width: loupeWidth, height: Self.bandHeight - 16)
             .animation(
                 .spring(response: 0.32, dampingFraction: 0.72),
                 value: isSnappedToNow
@@ -365,15 +603,19 @@ struct DayNightTimelineView: View {
         .allowsHitTesting(false)
     }
 
-    /// Dimming gradients at the left/right edges, over everything. Eased
-    /// with smoothstep so the fade has no visible start or end line.
+    /// Dimming gradients at the faded edges, over everything. Eased with
+    /// smoothstep so the fade has no visible start or end line.
     private var edgeFade: some View {
         HStack(spacing: 0) {
-            dimGradient(fadeFrom: .leading)
-                .frame(width: 40)
+            if fadedEdges.contains(.leading) {
+                dimGradient(fadeFrom: .leading)
+                    .frame(width: 40)
+            }
             Spacer(minLength: 0)
-            dimGradient(fadeFrom: .trailing)
-                .frame(width: 40)
+            if fadedEdges.contains(.trailing) {
+                dimGradient(fadeFrom: .trailing)
+                    .frame(width: 40)
+            }
         }
         .allowsHitTesting(false)
     }
@@ -394,9 +636,19 @@ private struct NowSnapBehavior: ScrollTargetBehavior {
     let dayWidth: CGFloat
     let threshold: CGFloat
     let isEnabled: Bool
+    /// When set, scrolls rest on multiples of this content width instead
+    /// of snapping to now — the minute grid in split mode.
+    let stepWidth: CGFloat?
     let onSnap: () -> Void
 
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        if let stepWidth, stepWidth > 0 {
+            let center = target.rect.origin.x + context.containerSize.width / 2
+            let snapped = (center / stepWidth).rounded() * stepWidth
+            target.rect.origin.x += snapped - center
+            return
+        }
+
         guard isEnabled else { return }
 
         let proposedCenterX = target.rect.origin.x + context.containerSize.width / 2
@@ -452,8 +704,61 @@ private struct DayCell: View {
                 }
             }
         }
-        // Feather the band's top and bottom edges (ticks included).
+        .overlay(alignment: .leading) {
+            sunEventLine(minute: schedule.sunrise, name: "Sunrise", brightEdge: .top)
+        }
+        .overlay(alignment: .leading) {
+            sunEventLine(minute: schedule.sunset, name: "Sunset", brightEdge: .bottom)
+        }
+        // Feather the band's top and bottom edges (ticks and sun lines
+        // included).
         .mask(verticalFeather)
+    }
+
+    /// Dotted vertical line marking a sun event's time in the band, a more
+    /// visible cousin of the hour ticks. Faded toward the sun's direction:
+    /// sunrise is bright at the top and dissolves downward, sunset the
+    /// reverse — clear at the dim end, smoothstepped to full ~30% in.
+    private func sunEventLine(
+        minute: Double,
+        name: String,
+        brightEdge: VerticalEdge
+    ) -> some View {
+        // Ease-in ramp compressed into the 15–85% span: the outer 15% at
+        // each end sits inside the feather mask's own fade, so the ramp
+        // holds its endpoint values there and does its work where it's
+        // actually visible. A nonzero floor keeps the full line readable;
+        // the ramp carries it from faint to bright.
+        let floorOpacity = 0.14
+        let peakOpacity = 0.7
+        let stops = [Gradient.Stop(color: .white.opacity(floorOpacity), location: 0)]
+            + (0 ... 8).map { i in
+                let p = Double(i) / 8
+                return Gradient.Stop(
+                    color: .white.opacity(
+                        floorOpacity + (peakOpacity - floorOpacity) * p * p
+                    ),
+                    location: 0.15 + p * 0.7
+                )
+            }
+            + [Gradient.Stop(color: .white.opacity(peakOpacity), location: 1)]
+
+        return Path { path in
+            path.move(to: CGPoint(x: 1, y: 1))
+            path.addLine(to: CGPoint(x: 1, y: bandHeight - 1))
+        }
+        .stroke(
+            LinearGradient(
+                stops: stops,
+                startPoint: brightEdge == .top ? .bottom : .top,
+                endPoint: brightEdge == .top ? .top : .bottom
+            ),
+            style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [0.001, 6])
+        )
+        .blendMode(.plusLighter)
+        .frame(width: 2, height: bandHeight)
+        .offset(x: (minute / 1440) * dayWidth - 1)
+        .accessibilityLabel("\(name), \(formattedTime(minute))")
     }
 
     /// A long, eased feather that reaches full opacity without the visible
@@ -514,98 +819,17 @@ private struct DayCell: View {
     }
 
     private var labels: some View {
-        ZStack(alignment: .leading) {
-            HStack(spacing: 0) {
-                ForEach(0 ..< 24, id: \.self) { hour in
-                    ZStack(alignment: .leading) {
-                        if hour.isMultiple(of: 2) {
-                            label(forHour: hour)
-                                .fixedSize()
-                        }
+        HStack(spacing: 0) {
+            ForEach(0 ..< 24, id: \.self) { hour in
+                ZStack(alignment: .leading) {
+                    if hour.isMultiple(of: 2) {
+                        label(forHour: hour)
+                            .fixedSize()
                     }
-                    .frame(width: hourWidth, height: labelHeight, alignment: .leading)
                 }
+                .frame(width: hourWidth, height: labelHeight, alignment: .leading)
             }
-
-            sunEventLabel(
-                minute: schedule.sunrise,
-                edge: .leading
-            )
-            sunEventLabel(
-                minute: schedule.sunset,
-                edge: .trailing
-            )
         }
-    }
-
-    private func sunEventLabel(minute: Double, edge: HorizontalEdge) -> some View {
-        let shieldWidth: CGFloat = 104
-        let eventInset: CGFloat = 18
-        let markerWidth: CGFloat = 10
-        let eventX = (minute / 1440) * dayWidth
-        let isSunrise = edge == .leading
-
-        return ZStack(alignment: isSunrise ? .leading : .trailing) {
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .black, location: 0.18),
-                    .init(color: .black, location: 0.82),
-                    .init(color: .clear, location: 1),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-
-            HStack(spacing: 5) {
-                if !isSunrise { eventTime(minute) }
-                sunEventMarker(isSunrise: isSunrise)
-                if isSunrise { eventTime(minute) }
-            }
-            .padding(
-                isSunrise ? .leading : .trailing,
-                eventInset - markerWidth / 2
-            )
-        }
-        .frame(width: shieldWidth, height: labelHeight)
-        .offset(
-            x: isSunrise
-                ? eventX - eventInset
-                : eventX + eventInset - shieldWidth
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            "\(isSunrise ? "Sunrise" : "Sunset"), \(formattedTime(minute))"
-        )
-    }
-
-    private func eventTime(_ minute: Double) -> Text {
-        Text(formattedTime(minute))
-            .font(.system(size: 15, weight: .semibold, design: .rounded))
-            .foregroundStyle(.secondary)
-    }
-
-    /// Capsule pointing the sun's way: sunrise glows toward the top with a
-    /// white sun dot rising out of it, sunset glows toward the bottom with
-    /// a black dot sinking into it.
-    private func sunEventMarker(isSunrise: Bool) -> some View {
-        Capsule()
-            .fill(
-                LinearGradient(
-                    colors: isSunrise
-                        ? [Color(red: 1, green: 0.76, blue: 0.22), .black]
-                        : [.black, Color(red: 0.98, green: 0.52, blue: 0.20)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .overlay(alignment: isSunrise ? .top : .bottom) {
-                Circle()
-                    .fill(isSunrise ? Color.white : Color.black)
-                    .frame(width: 5, height: 5)
-                    .padding(2.5)
-            }
-            .frame(width: 10, height: 16)
     }
 
     private func formattedTime(_ minute: Double) -> String {

@@ -13,6 +13,7 @@
 		0FC715F334EF0B9262D239B0 /* ScheduleChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE8DCFE629D54DA02663879 /* ScheduleChip.swift */; };
 		170B2D58E8BCCE09BEC92B7C /* LocationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC90B2758620FFCDFBEB519F /* LocationProvider.swift */; };
 		1866BD56685E2A39A6B58789 /* DayNightTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C516C363AF6EE1C29BC8ED5A /* DayNightTimelineView.swift */; };
+		2169C6829F8345A4C71AE059 /* PuckSlider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7014E1961B106151933036F /* PuckSlider.swift */; };
 		3617C203EBCF0F162931A711 /* SkyViewControlApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D910D926ECE21ED54106EFE /* SkyViewControlApp.swift */; };
 		3BDB9CD6AAD42368CB09085D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677A6744ED7872608AE729EF /* ContentView.swift */; };
 		49463153A39808CBC355F036 /* LampScheduleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E1C8FE203AD3DD85BD922D /* LampScheduleStore.swift */; };
@@ -37,6 +38,7 @@
 		B1E1C8FE203AD3DD85BD922D /* LampScheduleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LampScheduleStore.swift; sourceTree = "<group>"; };
 		C2D0D1AAA249707248D2F407 /* SunScheduleProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SunScheduleProvider.swift; sourceTree = "<group>"; };
 		C516C363AF6EE1C29BC8ED5A /* DayNightTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayNightTimelineView.swift; sourceTree = "<group>"; };
+		F7014E1961B106151933036F /* PuckSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PuckSlider.swift; sourceTree = "<group>"; };
 		FC90B2758620FFCDFBEB519F /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -59,6 +61,7 @@
 				B1E1C8FE203AD3DD85BD922D /* LampScheduleStore.swift */,
 				87D3FFB776E7EC8A884EE377 /* LampShape.swift */,
 				FC90B2758620FFCDFBEB519F /* LocationProvider.swift */,
+				F7014E1961B106151933036F /* PuckSlider.swift */,
 				0FE8DCFE629D54DA02663879 /* ScheduleChip.swift */,
 				15207391516D41A6B6464F0B /* ScheduleEditorView.swift */,
 				4D45455B4A6274C35BAED49B /* SettingsView.swift */,
@@ -144,6 +147,7 @@
 				49463153A39808CBC355F036 /* LampScheduleStore.swift in Sources */,
 				75502F5B16F96DF0339967F3 /* LampShape.swift in Sources */,
 				170B2D58E8BCCE09BEC92B7C /* LocationProvider.swift in Sources */,
+				2169C6829F8345A4C71AE059 /* PuckSlider.swift in Sources */,
 				0FC715F334EF0B9262D239B0 /* ScheduleChip.swift in Sources */,
 				0A68566C90BD955AC81E85DE /* ScheduleEditorView.swift in Sources */,
 				E9C54BBA518A78BE81B11F12 /* SettingsView.swift in Sources */,

@@ -37,15 +37,15 @@ struct ScheduleEditorView: View {
                     .onDelete { store.automations.remove(atOffsets: $0) }
                 }
             }
-            .navigationTitle("Schedules")
+            .navigationTitle("Schedule")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .close) { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .primaryAction) {
                     // Stub: a real editor for name/icon/scene comes later.
-                    Button {
+                    Button("Add", systemImage: "plus") {
                         store.automations.append(
                             LampAutomation(
                                 name: "Scene",
@@ -54,9 +54,10 @@ struct ScheduleEditorView: View {
                                 iconColor: .teal
                             )
                         )
-                    } label: {
-                        Image(systemName: "plus")
                     }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(role: .confirm) { dismiss() }
                 }
             }
         }
