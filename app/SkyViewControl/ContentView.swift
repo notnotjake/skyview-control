@@ -12,6 +12,11 @@ struct ContentView: View {
     /// Chips and loupe fade out ahead of the split animation (and return
     /// after the merge), so they aren't caught mid-transition.
     @State private var timelineDecorationsHidden = false
+    /// Toggled in Settings → Developer; swaps the lamp preview for the
+    /// timeline debug controls.
+    @AppStorage("timelineDebugMode") private var timelineDebugMode = false
+    @State private var debugMarksVisible = true
+    @State private var debugZoom = 1.0
     @State private var timelineWidth: CGFloat = 0
     @State private var bedtimeScroll = TimelineScrollCommand()
     @State private var wakeScroll = TimelineScrollCommand()
@@ -32,8 +37,13 @@ struct ContentView: View {
                 topBar
 
                 VStack(spacing: 8) {
-                    LampPreviewView()
-                        .padding(.horizontal, 72)
+                    if timelineDebugMode {
+                        timelineDebugPanel
+                            .padding(.horizontal, 24)
+                    } else {
+                        LampPreviewView()
+                            .padding(.horizontal, 72)
+                    }
 
                     HStack {
                         if editingSleepSchedule {
@@ -145,6 +155,37 @@ struct ContentView: View {
         }
     }
 
+    /// Controls for exercising the timeline in isolation: mark visibility,
+    /// live zoom, and programmatic snap-to-now.
+    private var timelineDebugPanel: some View {
+        VStack(spacing: 12) {
+            Toggle("Timeline marks", isOn: $debugMarksVisible)
+
+            HStack(spacing: 10) {
+                Text("Zoom")
+                Slider(value: $debugZoom, in: 0.5 ... 3)
+                Text(String(format: "%.2f×", debugZoom))
+                    .monospacedDigit()
+                    .frame(width: 52, alignment: .trailing)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                bedtimeScroll = TimelineScrollCommand(
+                    generation: bedtimeScroll.generation + 1
+                )
+            } label: {
+                Label("Snap to Now", systemImage: "location")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
+        .font(.system(size: 14, weight: .medium, design: .rounded))
+        .padding(14)
+        .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 18))
+        .foregroundStyle(.white)
+    }
+
     private static let splitDividerWidth: CGFloat = 6
     /// Hour width multiplier for the split halves: 1.4 for the wider look,
     /// times another 1.5 to slow dragging — in a scroll view, pixels per
@@ -171,6 +212,7 @@ struct ContentView: View {
             DayNightTimelineView(
                 schedule: sunProvider.schedule,
                 events: timelineDecorationsHidden
+                    || (timelineDebugMode && !debugMarksVisible)
                     ? []
                     : scheduleStore.all.map(TimelineEventItem.init),
                 showsLoupe: editingSleepSchedule || !timelineDecorationsHidden,
@@ -178,7 +220,9 @@ struct ContentView: View {
                 loupeTint: editingSleepSchedule ? .purple : nil,
                 snapsToNow: !editingSleepSchedule,
                 fadedEdges: editingSleepSchedule ? .leading : .all,
-                zoom: editingSleepSchedule ? Self.splitZoom : 1,
+                zoom: editingSleepSchedule
+                    ? Self.splitZoom
+                    : (timelineDebugMode ? debugZoom : 1),
                 minuteStep: editingSleepSchedule ? 5 : 1,
                 scrollCommand: bedtimeScroll,
                 onFocusedEventChange: { event in
@@ -300,7 +344,9 @@ struct ContentView: View {
         }
     }
 
-    /// Bedtime-to-wake span, wrapping midnight: "8 hrs" or "8 hrs 45 min".
+    /// Bedtime-to-wake span, wrapping midnight: "8 hrs 45 mins", "1 hr",
+    /// or just "13 mins" under an hour. The inflect interpolation handles
+    /// the hr/hrs and min/mins pluralization.
     private var sleepDurationText: String {
         let bedtime = draftBedtimeMinute ?? scheduleStore.bedtime.minuteOfDay
         let wake = draftWakeMinute ?? scheduleStore.wake.minuteOfDay
@@ -308,9 +354,22 @@ struct ContentView: View {
         let total = Int(span.rounded()) % 1440
         let hours = total / 60
         let minutes = total % 60
-        var text = "\(hours) \(hours == 1 ? "hr" : "hrs")"
-        if minutes > 0 { text += " \(minutes) min" }
-        return text
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append(String(
+                AttributedString(
+                    localized: "^[\(hours) hr](inflect: true)"
+                ).characters
+            ))
+        }
+        if minutes > 0 || hours == 0 {
+            parts.append(String(
+                AttributedString(
+                    localized: "^[\(minutes) min](inflect: true)"
+                ).characters
+            ))
+        }
+        return parts.joined(separator: " ")
     }
 
     private func sleepTimeSection(

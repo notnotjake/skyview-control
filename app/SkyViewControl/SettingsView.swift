@@ -4,6 +4,7 @@ import UIKit
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @AppStorage("timelineDebugMode") private var timelineDebugMode = false
 
     var locationProvider: LocationProvider
     var sunProvider: SunScheduleProvider
@@ -83,6 +84,13 @@ struct SettingsView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                Section("Developer") {
+                    Toggle("Debug Mode", isOn: $timelineDebugMode)
+                    Text("Swaps the lamp preview for timeline debug controls: mark visibility, zoom, and snap to now.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
