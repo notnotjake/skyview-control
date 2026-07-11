@@ -68,9 +68,22 @@ struct PuckSlider: View {
                         ? rangeStart / max(geometry.size.width, 1)
                         : 0
                 )
+                // Off reads as the light draining out of the track.
+                .opacity(isDocked ? 0.4 : 1)
+                .animation(.easeOut(duration: 0.2), value: isDocked)
                 if hasPowerWell {
                     powerWell(size: wellSize)
                         .offset(x: Self.puckInset)
+                }
+                if isDocked {
+                    Text("Lamp is Off")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+                        // Centered in the dimmed track right of the well.
+                        .frame(width: max(geometry.size.width - rangeStart, 0))
+                        .offset(x: rangeStart)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                 }
                 puck(size: puckSize)
                     .offset(x: puckOffset(
@@ -255,19 +268,14 @@ struct PuckSlider: View {
     }
 
     /// Glass power button sunk into the track's left end. Dragging the
-    /// puck out of its range docks it here — the puck fades out and the
-    /// well darkens to show the off state.
+    /// puck out of its range docks it here — the puck fades out while the
+    /// track dims and labels itself off.
     private func powerWell(size: CGFloat) -> some View {
         Image(systemName: "power")
             .font(.system(size: size * 0.42, weight: .medium))
             .foregroundStyle(.white.opacity(isDocked ? 0.95 : 0.85))
             .frame(width: size, height: size)
-            .glassEffect(
-                isDocked
-                    ? .regular.tint(.black.opacity(0.55)).interactive()
-                    : .regular.interactive(),
-                in: .circle
-            )
+            .glassEffect(.regular.interactive(), in: .circle)
             .animation(.easeOut(duration: 0.2), value: isDocked)
     }
 
@@ -304,14 +312,27 @@ extension [Gradient.Stop] {
         ]
     }
 
-    /// Warm-to-cool ramp for the color temperature slider: candle amber
-    /// through neutral white to daylight blue.
+    /// Dim-to-bright ramp for a single lamp channel in that channel's
+    /// color.
+    static func channel(peak: Color) -> [Gradient.Stop] {
+        [
+            .init(color: peak.mix(with: .black, by: 0.85), location: 0),
+            .init(color: peak.mix(with: .black, by: 0.45), location: 0.55),
+            .init(color: peak, location: 1),
+        ]
+    }
+
+    /// Warm-to-cool ramp for the color temperature slider: ember red
+    /// through candle amber, crossing neutral at the midpoint so the whole
+    /// upper half reads blue, deepening to a strong sky blue at the end.
     static var colorTemperature: [Gradient.Stop] {
         [
-            .init(color: Color(red: 1.0, green: 0.58, blue: 0.16), location: 0),
-            .init(color: Color(red: 1.0, green: 0.80, blue: 0.53), location: 0.35),
-            .init(color: Color(red: 1.0, green: 0.94, blue: 0.86), location: 0.6),
-            .init(color: Color(red: 0.71, green: 0.82, blue: 1.0), location: 1),
+            .init(color: Color(red: 1.0, green: 0.33, blue: 0.10), location: 0),
+            .init(color: Color(red: 1.0, green: 0.62, blue: 0.26), location: 0.2),
+            .init(color: Color(red: 1.0, green: 0.88, blue: 0.70), location: 0.38),
+            .init(color: Color(red: 0.95, green: 0.96, blue: 1.0), location: 0.5),
+            .init(color: Color(red: 0.45, green: 0.62, blue: 1.0), location: 0.72),
+            .init(color: Color(red: 0.20, green: 0.38, blue: 0.95), location: 1),
         ]
     }
 }

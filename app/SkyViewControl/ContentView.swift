@@ -4,6 +4,13 @@ struct ContentView: View {
     @State private var brightness = 0.65
     @State private var colorTemperature = 0.4
     @State private var showingColorTemp = false
+    /// Per-channel control mode, entered from the color-temp row's more
+    /// button; the timeline hides and four channel sliders take over.
+    @State private var showingChannels = false
+    @State private var channelRed = 0.0
+    @State private var channelWarm = 0.0
+    @State private var channelWhite = 0.0
+    @State private var channelBlue = 0.0
     @Namespace private var sliderSwap
     @State private var showingDevicePicker = false
     @State private var showingSettings = false
@@ -41,46 +48,72 @@ struct ContentView: View {
                         timelineDebugPanel
                             .padding(.horizontal, 24)
                     } else {
+                        // The extra padding trims the aspect-fit lamp's
+                        // height while keeping its shape, so it ends near
+                        // the screen's vertical middle.
                         LampPreviewView()
-                            .padding(.horizontal, 72)
+                            .padding(
+                                .horizontal,
+                                72 + LampShape.aspectRatio * 32 / 2
+                            )
                     }
 
-                    HStack {
-                        if editingSleepSchedule {
-                            glassIconButton("xmark") {
-                                exitSleepScheduleMode()
-                            }
-                            Spacer()
-                            glassIconButton("checkmark", tint: .blue) {
-                                exitSleepScheduleMode()
-                            }
-                        } else {
-                            glassIconButton("bed.double.fill") {
-                                enterSleepScheduleMode()
-                            }
-                            Spacer()
-                            glassIconButton("deskclock") {
-                                showingScheduleEditor = true
+                    if !showingChannels {
+                        HStack {
+                            if editingSleepSchedule {
+                                // The confirm/cancel pair keeps the original
+                                // larger glyphs.
+                                glassIconButton("xmark", iconSize: 48 * 0.48) {
+                                    exitSleepScheduleMode()
+                                }
+                                Spacer()
+                                glassIconButton(
+                                    "checkmark",
+                                    tint: .blue,
+                                    iconSize: 48 * 0.48
+                                ) {
+                                    exitSleepScheduleMode()
+                                }
+                            } else {
+                                glassIconButton("bed.double.fill") {
+                                    enterSleepScheduleMode()
+                                }
+                                Spacer()
+                                glassIconButton("deskclock") {
+                                    showingScheduleEditor = true
+                                }
                             }
                         }
-                    }
-                    .overlay(alignment: .bottom) { timelineCallout }
-                    .padding(.horizontal, 20)
+                        .overlay(alignment: .bottom) { timelineCallout }
+                        .padding(.horizontal, 20)
 
-                    timelineArea
-
-                    Group {
-                        if editingSleepSchedule {
-                            sleepScheduleTimes
-                        } else {
-                            sliderRow
-                        }
+                        timelineArea
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 16)
                 }
+                // Wins the vertical-space contest: the aspect-fit lamp is
+                // compressible, and without priority the flexible slider
+                // region below would squash it to a fraction of its size.
+                .layoutPriority(1)
 
-                Spacer()
+                // Sliders float centered between the timeline and the
+                // palette; the sleep-mode times stay pinned up top.
+                Group {
+                    if editingSleepSchedule {
+                        sleepScheduleTimes
+                            .padding(.top, 4)
+                    } else {
+                        sliderRow
+                    }
+                }
+                .padding(.horizontal, 24)
+                .frame(
+                    maxHeight: .infinity,
+                    alignment: editingSleepSchedule ? .top : .center
+                )
+                // Palette region (56 + 24) plus a margin matching the
+                // stack spacing above, so the centering is true between
+                // the timeline and the palette.
+                .padding(.bottom, 108)
             }
 
             bottomBar
@@ -422,11 +455,21 @@ struct ContentView: View {
     /// the brightness slider reads as collapsing into a freshly minted
     /// button and re-inflating from it on the way back.
     private var sliderRow: some View {
-        HStack(spacing: 12) {
+        // Bottom-aligned so the flanking buttons stay with the bottom
+        // slider when the channel sliders stack up above it.
+        HStack(alignment: .bottom, spacing: 12) {
             if showingColorTemp {
-                glassIconButton("sun.max.fill", size: PuckSlider.height) {
+                glassIconButton(
+                    showingChannels ? "xmark" : "sun.max.fill",
+                    size: PuckSlider.height,
+                    iconSize: showingChannels ? 48 * 0.48 : nil
+                ) {
                     withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) {
-                        showingColorTemp = false
+                        if showingChannels {
+                            showingChannels = false
+                        } else {
+                            showingColorTemp = false
+                        }
                     }
                 }
                 .overlay {
@@ -435,42 +478,84 @@ struct ContentView: View {
                 }
             }
 
-            ZStack {
-                if showingColorTemp {
-                    PuckSlider(
-                        value: $colorTemperature,
-                        label: "Color temperature",
-                        stops: .colorTemperature,
-                        detentStep: 0.125,
-                        detentFeedback: .impact(flexibility: .soft, intensity: 0.48)
+            VStack(spacing: 12) {
+                if showingChannels {
+                    // Staggered from the bottom up on the way in — the
+                    // stack grows out of the existing slider — and back
+                    // down top-first on the way out, mirroring it.
+                    channelSlider(
+                        $channelRed,
+                        label: "Red channel",
+                        peak: Color(red: 1.0, green: 0.16, blue: 0.10),
+                        insertionDelay: 0.12,
+                        removalDelay: 0
                     )
-                    .matchedGeometryEffect(id: "temperature", in: sliderSwap)
-                    .transition(.untouchable.combined(with: .opacity))
-                } else {
-                    PuckSlider(
-                        value: $brightness,
-                        label: "Brightness",
-                        stops: .brightness,
-                        hasPowerWell: true,
-                        detentStep: 0.2
+                    channelSlider(
+                        $channelWarm,
+                        label: "Warm channel",
+                        peak: Color(red: 1.0, green: 0.55, blue: 0.15),
+                        insertionDelay: 0.06,
+                        removalDelay: 0.06
                     )
-                    .matchedGeometryEffect(id: "brightness", in: sliderSwap)
-                    .transition(.untouchable.combined(with: .opacity))
+                    channelSlider(
+                        $channelWhite,
+                        label: "White channel",
+                        peak: Color(red: 1.0, green: 0.92, blue: 0.78),
+                        insertionDelay: 0,
+                        removalDelay: 0.12
+                    )
+                }
+
+                ZStack {
+                    if showingChannels {
+                        channelSlider(
+                            $channelBlue,
+                            label: "Blue channel",
+                            peak: Color(red: 0.40, green: 0.58, blue: 1.0)
+                        )
+                    } else if showingColorTemp {
+                        PuckSlider(
+                            value: $colorTemperature,
+                            label: "Color temperature",
+                            stops: .colorTemperature,
+                            detentStep: 0.125,
+                            detentFeedback: .impact(flexibility: .soft, intensity: 0.5)
+                        )
+                        .matchedGeometryEffect(id: "temperature", in: sliderSwap)
+                        .transition(.untouchable.combined(with: .opacity))
+                    } else {
+                        PuckSlider(
+                            value: $brightness,
+                            label: "Brightness",
+                            stops: .brightness,
+                            hasPowerWell: true,
+                            detentStep: 0.2
+                        )
+                        .matchedGeometryEffect(id: "brightness", in: sliderSwap)
+                        .transition(.untouchable.combined(with: .opacity))
+                    }
                 }
             }
 
             glassIconButton(
-                showingColorTemp
-                    ? "slider.horizontal.3"
-                    : "circle.lefthalf.striped.horizontal",
-                size: PuckSlider.height
+                showingChannels
+                    ? "checkmark"
+                    : (showingColorTemp
+                        ? "slider.horizontal.3"
+                        : "circle.lefthalf.striped.horizontal"),
+                size: PuckSlider.height,
+                tint: showingChannels ? .blue : nil,
+                iconSize: showingChannels ? 48 * 0.48 : nil
             ) {
-                if !showingColorTemp {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) {
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) {
+                    if showingChannels {
+                        showingChannels = false
+                    } else if showingColorTemp {
+                        showingChannels = true
+                    } else {
                         showingColorTemp = true
                     }
                 }
-                // In temp mode this will open the advanced controls.
             }
             .overlay {
                 if !showingColorTemp {
@@ -479,6 +564,43 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// One lamp-channel intensity slider, dim-to-bright in the channel's
+    /// color. Both directions fade while translating a few points, each on
+    /// its own delay so the stack staggers in and back out.
+    private func channelSlider(
+        _ value: Binding<Double>,
+        label: String,
+        peak: Color,
+        insertionDelay: Double = 0,
+        removalDelay: Double = 0
+    ) -> some View {
+        PuckSlider(
+            value: value,
+            label: label,
+            stops: .channel(peak: peak),
+            detentStep: 0.125,
+            detentFeedback: .impact(flexibility: .soft, intensity: 0.5)
+        )
+        .transition(
+            .asymmetric(
+                insertion: .untouchable
+                    .combined(with: .opacity)
+                    .combined(with: .offset(y: 14))
+                    .animation(
+                        .spring(response: 0.42, dampingFraction: 0.8)
+                            .delay(insertionDelay)
+                    ),
+                removal: .untouchable
+                    .combined(with: .opacity)
+                    .combined(with: .offset(y: 14))
+                    .animation(
+                        .spring(response: 0.34, dampingFraction: 0.85)
+                            .delay(removalDelay)
+                    )
+            )
+        )
     }
 
     private var topBar: some View {
@@ -533,11 +655,15 @@ struct ContentView: View {
         _ icon: String,
         size: CGFloat = 48,
         tint: Color? = nil,
+        iconSize: CGFloat? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: size * 0.48, weight: .medium))
+                .font(.system(
+                    size: iconSize ?? (size * 0.48 - 3),
+                    weight: .medium
+                ))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
                 // The frame's transparent area isn't hit-testable on its
