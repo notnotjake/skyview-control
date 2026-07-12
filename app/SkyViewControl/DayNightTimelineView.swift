@@ -72,6 +72,11 @@ struct DayNightTimelineView: View {
     /// Reports the minute of day at the viewport center as it changes —
     /// how the split halves feed the times they're picking.
     var onCenteredMinuteChange: ((Int) -> Void)? = nil
+    /// Enables pinch-to-zoom: reports the new zoom on every pinch tick so
+    /// the owner can persist it back into `zoom`. The view anchors the
+    /// content under the pinch centroid itself; two-finger panning still
+    /// flows through the scroll view, so pinch+pan composes maps-style.
+    var onPinchZoom: ((CGFloat) -> Void)? = nil
 
     /// How close (in minutes) the loupe must be to an event to count as
     /// over it. ~14 min covers the loupe's own width plus a little grace.
@@ -137,6 +142,11 @@ struct DayNightTimelineView: View {
     @State private var trackedMinute: Double?
     /// Per-frame zoom from the probe view; 0 until first measured.
     @State private var liveZoom: CGFloat = 0
+    /// Zoom when the current pinch began; nil when no pinch is active.
+    @State private var pinchBaseZoom: CGFloat?
+    /// Zoom of the last applied pinch tick — the offset has been
+    /// transformed to exactly this scale, independent of param/probe lag.
+    @State private var pinchAppliedZoom: CGFloat = 1
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -177,6 +187,25 @@ struct DayNightTimelineView: View {
                 )
             )
             .scrollPosition($position)
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { gesture in
+                        guard onPinchZoom != nil else { return }
+                        let base: CGFloat
+                        if let active = pinchBaseZoom {
+                            base = active
+                        } else {
+                            base = zoom
+                            pinchBaseZoom = zoom
+                            pinchAppliedZoom = zoom
+                        }
+                        let target = min(max(base * gesture.magnification, 0.5), 3)
+                        applyPinch(to: target, anchorUnitX: gesture.startAnchor.x)
+                    }
+                    .onEnded { _ in
+                        pinchBaseZoom = nil
+                    }
+            )
             // Anchor the *initial* offset only. The size-change anchor is
             // deliberately off: it preserves the content's unit midpoint —
             // midnight of day 0 — so zooming while centered anywhere else
@@ -220,9 +249,11 @@ struct DayNightTimelineView: View {
                 }
             }
             .onChange(of: zoom) { oldZoom, newZoom in
+                // An active pinch does its own centroid-anchored
+                // compensation; this center-pinning would double up.
                 guard hasCentered, oldZoom > 0, newZoom > 0,
                       oldZoom != newZoom, !scrollCommandInFlight,
-                      trackedMinute == nil else { return }
+                      trackedMinute == nil, pinchBaseZoom == nil else { return }
                 // Keep the centered minute fixed across the scale change,
                 // re-anchored in the day copy nearest the runway middle so
                 // repeated zooms can't walk the offset toward an end.
@@ -432,6 +463,27 @@ struct DayNightTimelineView: View {
         .allowsHitTesting(false)
     }
 
+    /// One pinch tick: rescale the offset so the content under the pinch
+    /// centroid stays put, then report the zoom for the owner to persist.
+    /// Old scale comes from the pinch's own bookkeeping, not the probe or
+    /// param (both lag a frame behind the gesture).
+    private func applyPinch(to newZoom: CGFloat, anchorUnitX: CGFloat) {
+        let oldDayW = Self.baseHourWidth * 24 * pinchAppliedZoom
+        let newDayW = Self.baseHourWidth * 24 * newZoom
+        guard oldDayW > 0 else { return }
+        let anchorX = anchorUnitX * liveViewportWidth
+        var newOffset = (scrollOffset + anchorX) * (newDayW / oldDayW) - anchorX
+        // Renormalize by whole days toward the runway middle — invisible,
+        // and keeps repeated pinches from walking the offset off an end.
+        let centerX = newOffset + liveViewportWidth / 2
+        let wholeDays = ((centerX - Self.runwayWidth / 2) / newDayW).rounded()
+        newOffset -= wholeDays * newDayW
+        scrollOffset = newOffset
+        position.scrollTo(x: newOffset)
+        pinchAppliedZoom = newZoom
+        onPinchZoom?(newZoom)
+    }
+
     /// Keeps the virtual offset comfortably inside the runway. Runs only
     /// at idle, so the whole-day jump can't interrupt a fling.
     private func recenterRunwayIfNeeded() {
@@ -596,7 +648,18 @@ struct DayNightTimelineView: View {
     /// the clear ring at the same width.
     private var loupeWidth: CGFloat { loupeTint == nil ? 18 : 11 }
 
+    /// The tinted editor loupes square off into a tight rounded rect — a
+    /// precise pick mark — where the resting scrub loupe stays a capsule.
+    @ViewBuilder
     private var centerLoupe: some View {
+        if let tint = loupeTint {
+            loupeBody(RoundedRectangle(cornerRadius: 2), glass: Glass.clear.tint(tint))
+        } else {
+            loupeBody(Capsule(), glass: .clear)
+        }
+    }
+
+    private func loupeBody(_ shape: some InsettableShape, glass: Glass) -> some View {
         Color.clear
             // Animate the real size rather than scaleEffect: a transform
             // squashes the rendered glass (refraction and highlights
@@ -606,17 +669,14 @@ struct DayNightTimelineView: View {
                 width: isSnappedToNow ? 5 : loupeWidth,
                 height: (Self.bandHeight - 16) * (isSnappedToNow ? 0.85 : 1)
             )
-            .glassEffect(
-                loupeTint.map { Glass.clear.tint($0) } ?? .clear,
-                in: .capsule
-            )
+            .glassEffect(glass, in: shape)
             // Cut the clear center back out, leaving a true glass ring.
             .mask {
-                Capsule()
+                shape
                     .strokeBorder(lineWidth: 3.5)
             }
             .overlay {
-                Capsule()
+                shape
                     .strokeBorder(
                         LinearGradient(
                             colors: [

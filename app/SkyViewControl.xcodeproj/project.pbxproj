@@ -18,6 +18,7 @@
 		3BDB9CD6AAD42368CB09085D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677A6744ED7872608AE729EF /* ContentView.swift */; };
 		49463153A39808CBC355F036 /* LampScheduleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E1C8FE203AD3DD85BD922D /* LampScheduleStore.swift */; };
 		75502F5B16F96DF0339967F3 /* LampShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87D3FFB776E7EC8A884EE377 /* LampShape.swift */; };
+		799AD641193DDED03BFF1075 /* TimeKeypadEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D77602C1F77A95058F71D8C8 /* TimeKeypadEntry.swift */; };
 		9727445CD15CC4AA977CD220 /* SunScheduleProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2D0D1AAA249707248D2F407 /* SunScheduleProvider.swift */; };
 		B1D34BE5A6DA3B024D393ED6 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37B86BE96CF76A9ABFA350A8 /* DevicePickerView.swift */; };
 		E9C54BBA518A78BE81B11F12 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D45455B4A6274C35BAED49B /* SettingsView.swift */; };
@@ -38,6 +39,7 @@
 		B1E1C8FE203AD3DD85BD922D /* LampScheduleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LampScheduleStore.swift; sourceTree = "<group>"; };
 		C2D0D1AAA249707248D2F407 /* SunScheduleProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SunScheduleProvider.swift; sourceTree = "<group>"; };
 		C516C363AF6EE1C29BC8ED5A /* DayNightTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayNightTimelineView.swift; sourceTree = "<group>"; };
+		D77602C1F77A95058F71D8C8 /* TimeKeypadEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeKeypadEntry.swift; sourceTree = "<group>"; };
 		F7014E1961B106151933036F /* PuckSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PuckSlider.swift; sourceTree = "<group>"; };
 		FC90B2758620FFCDFBEB519F /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -69,6 +71,7 @@
 				1D910D926ECE21ED54106EFE /* SkyViewControlApp.swift */,
 				A178190BA724456BFB8881A7 /* SunSchedule.swift */,
 				C2D0D1AAA249707248D2F407 /* SunScheduleProvider.swift */,
+				D77602C1F77A95058F71D8C8 /* TimeKeypadEntry.swift */,
 			);
 			path = SkyViewControl;
 			sourceTree = "<group>";
@@ -154,6 +157,7 @@
 				3617C203EBCF0F162931A711 /* SkyViewControlApp.swift in Sources */,
 				0C32F210C8BF0133A2A22485 /* SunSchedule.swift in Sources */,
 				9727445CD15CC4AA977CD220 /* SunScheduleProvider.swift in Sources */,
+				799AD641193DDED03BFF1075 /* TimeKeypadEntry.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

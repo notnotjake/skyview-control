@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// Which of the sleep-schedule times owns the keypad.
+enum SleepTimeField: Hashable {
+    case bedtime, wake
+}
+
 struct ContentView: View {
     @State private var brightness = 0.65
     @State private var colorTemperature = 0.4
@@ -23,7 +28,12 @@ struct ContentView: View {
     /// timeline debug controls.
     @AppStorage("timelineDebugMode") private var timelineDebugMode = false
     @State private var debugMarksVisible = true
-    @State private var debugZoom = 1.0
+    /// Mock preset dots in the bottom palette.
+    @State private var presetCount = 0
+    @State private var selectedPreset: Int?
+    /// Pinch-persisted timeline zoom; the debug panel's slider edits the
+    /// same value.
+    @State private var userZoom = 1.0
     @State private var timelineWidth: CGFloat = 0
     @State private var bedtimeScroll = TimelineScrollCommand()
     @State private var wakeScroll = TimelineScrollCommand()
@@ -34,6 +44,19 @@ struct ContentView: View {
     @State private var sunProvider = SunScheduleProvider()
     @State private var locationProvider = LocationProvider()
     @State private var focusedTimelineEvent: FocusedTimelineEvent?
+    /// Keypad editing of the big sleep times. Focus routes the system
+    /// number pad into `timeEntry` via a hidden proxy text field; the
+    /// mirrored bool drives the layout changes (lamp hides, content rises)
+    /// with an animation FocusState itself can't carry.
+    @FocusState private var focusedTimeField: SleepTimeField?
+    @State private var timeEntry = TimeKeypadEntry()
+    @State private var keypadBuffer = ContentView.keypadSentinel
+    @State private var timeKeyboardUp = false
+
+    /// The proxy field always holds this one character, so a delete (the
+    /// buffer emptying) is distinguishable from typed digits appended
+    /// after it.
+    private static let keypadSentinel = "•"
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -47,15 +70,18 @@ struct ContentView: View {
                     if timelineDebugMode {
                         timelineDebugPanel
                             .padding(.horizontal, 24)
-                    } else {
+                    } else if !timeKeyboardUp {
                         // The extra padding trims the aspect-fit lamp's
                         // height while keeping its shape, so it ends near
-                        // the screen's vertical middle.
+                        // the screen's vertical middle. The keypad hides
+                        // the lamp outright: everything below rises to
+                        // stay clear of the keyboard.
                         LampPreviewView()
                             .padding(
                                 .horizontal,
                                 72 + LampShape.aspectRatio * 32 / 2
                             )
+                            .transition(.opacity)
                     }
 
                     if !showingChannels {
@@ -112,15 +138,27 @@ struct ContentView: View {
                 )
                 // Palette region (56 + 24) plus a margin matching the
                 // stack spacing above, so the centering is true between
-                // the timeline and the palette.
-                .padding(.bottom, 108)
+                // the timeline and the palette. With the keyboard up the
+                // palette is gone and every point matters.
+                .padding(.bottom, timeKeyboardUp ? 16 : 108)
             }
 
             bottomBar
                 .offset(y: editingSleepSchedule ? 100 : 0)
                 .opacity(editingSleepSchedule ? 0 : 1)
         }
-        .ignoresSafeArea(edges: .bottom)
+        // Container-only: the keyboard must still inset the layout so the
+        // sleep times ride up above it.
+        .ignoresSafeArea(.container, edges: .bottom)
+        .onChange(of: focusedTimeField) { _, newValue in
+            // A fresh focus (or a field switch) starts over at whole-time
+            // selection, per the pickers' prior art.
+            timeEntry = TimeKeypadEntry()
+            keypadBuffer = Self.keypadSentinel
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                timeKeyboardUp = newValue != nil
+            }
+        }
         .task {
             locationProvider.start()
             await sunProvider.refresh(at: locationProvider.location)
@@ -196,8 +234,8 @@ struct ContentView: View {
 
             HStack(spacing: 10) {
                 Text("Zoom")
-                Slider(value: $debugZoom, in: 0.5 ... 3)
-                Text(String(format: "%.2f×", debugZoom))
+                Slider(value: $userZoom, in: 0.5 ... 3)
+                Text(String(format: "%.2f×", userZoom))
                     .monospacedDigit()
                     .frame(width: 52, alignment: .trailing)
                     .foregroundStyle(.secondary)
@@ -253,10 +291,12 @@ struct ContentView: View {
                 loupeTint: editingSleepSchedule ? .purple : nil,
                 snapsToNow: !editingSleepSchedule,
                 fadedEdges: editingSleepSchedule ? .leading : .all,
-                zoom: editingSleepSchedule
-                    ? Self.splitZoom
-                    : (timelineDebugMode ? debugZoom : 1),
-                minuteStep: editingSleepSchedule ? 5 : 1,
+                zoom: editingSleepSchedule ? Self.splitZoom : userZoom,
+                // Keypad entry types exact minutes; the 5s grid would
+                // round them back off when the scroll reports in.
+                minuteStep: editingSleepSchedule
+                    ? (focusedTimeField == .bedtime ? 1 : 5)
+                    : 1,
                 scrollCommand: bedtimeScroll,
                 onFocusedEventChange: { event in
                     withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
@@ -264,10 +304,16 @@ struct ContentView: View {
                     }
                 },
                 onCenteredMinuteChange: { minute in
-                    if editingSleepSchedule {
+                    // While the keypad owns this field the typed value is
+                    // the source of truth; the command scroll's in-between
+                    // frames must not churn the label.
+                    if editingSleepSchedule, focusedTimeField != .bedtime {
                         draftBedtimeMinute = Double(minute)
                     }
-                }
+                },
+                onPinchZoom: editingSleepSchedule
+                    ? nil
+                    : { newZoom in userZoom = newZoom }
             )
             .frame(width: editingSleepSchedule ? splitTimelineWidth : nil)
 
@@ -283,9 +329,13 @@ struct ContentView: View {
                     snapsToNow: false,
                     fadedEdges: .trailing,
                     zoom: Self.splitZoom,
-                    minuteStep: 5,
+                    minuteStep: focusedTimeField == .wake ? 1 : 5,
                     scrollCommand: wakeScroll,
-                    onCenteredMinuteChange: { draftWakeMinute = Double($0) }
+                    onCenteredMinuteChange: { minute in
+                        if focusedTimeField != .wake {
+                            draftWakeMinute = Double(minute)
+                        }
+                    }
                 )
                 .frame(width: splitTimelineWidth)
                 .transition(.opacity)
@@ -296,6 +346,9 @@ struct ContentView: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
+        // Grabbing a timeline half hands control back to scrolling: the
+        // keyboard drops and the halves resume feeding the drafts.
+        .scrollDismissesKeyboard(.immediately)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             timelineWidth = $0
         }
@@ -329,6 +382,7 @@ struct ContentView: View {
     /// For now both the X and the checkmark just leave the mode; discard
     /// vs. save comes when the times are editable.
     private func exitSleepScheduleMode() {
+        focusedTimeField = nil
         bedtimeScroll = TimelineScrollCommand(
             generation: bedtimeScroll.generation + 1,
             tracksResize: true
@@ -353,14 +407,18 @@ struct ContentView: View {
         }
     }
 
-    /// Large read-only bedtime/wake times shown in place of the sliders
-    /// while the sleep-schedule mode is up, with the night's total length
-    /// between them, on the labels' line.
+    /// Large bedtime/wake times shown in place of the sliders while the
+    /// sleep-schedule mode is up, with the night's total length between
+    /// them, on the labels' line. Tapping a time opens the number pad on
+    /// it (see `tapTimeSegment`); the hidden proxy fields in the
+    /// background are what actually hold keyboard focus.
     private var sleepScheduleTimes: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             sleepTimeSection(
                 label: "Bedtime",
+                field: .bedtime,
                 minuteOfDay: draftBedtimeMinute ?? scheduleStore.bedtime.minuteOfDay,
+                tint: .purple,
                 alignment: .leading
             )
             Text(sleepDurationText)
@@ -371,10 +429,123 @@ struct ContentView: View {
                 .animation(.snappy(duration: 0.18), value: sleepDurationText)
             sleepTimeSection(
                 label: "Wake Up",
+                field: .wake,
                 minuteOfDay: draftWakeMinute ?? scheduleStore.wake.minuteOfDay,
+                tint: .orange,
                 alignment: .trailing
             )
         }
+        .background { keypadProxyFields }
+        .onChange(of: keypadBuffer) { _, newValue in
+            handleKeypadBuffer(newValue)
+        }
+    }
+
+    /// One invisible number-pad text field per sleep time. Keyboard input
+    /// has to land in a real text field; these stay a point big and
+    /// near-transparent (a zero-size or fully hidden field can't take
+    /// focus) while the visible time renders the state.
+    private var keypadProxyFields: some View {
+        ZStack {
+            keypadProxyField(for: .bedtime)
+            keypadProxyField(for: .wake)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func keypadProxyField(for field: SleepTimeField) -> some View {
+        TextField("", text: $keypadBuffer)
+            .keyboardType(.numberPad)
+            .focused($focusedTimeField, equals: field)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedTimeField = nil }
+                        .fontWeight(.semibold)
+                }
+            }
+            .frame(width: 1, height: 1)
+            .opacity(0.02)
+            .allowsHitTesting(false)
+    }
+
+    /// Routes the proxy field's changes into the entry state: an emptied
+    /// buffer was a delete, anything after the sentinel was typed digits.
+    /// The buffer then resets so every keystroke diffs against the same
+    /// baseline.
+    private func handleKeypadBuffer(_ newValue: String) {
+        guard newValue != Self.keypadSentinel else { return }
+        defer { keypadBuffer = Self.keypadSentinel }
+        guard let field = focusedTimeField else { return }
+        if newValue.isEmpty {
+            timeEntry.backspace()
+            return
+        }
+        let typed = newValue.hasPrefix(Self.keypadSentinel)
+            ? newValue.dropFirst()
+            : newValue[...]
+        for character in typed {
+            guard let digit = character.wholeNumberValue else { continue }
+            let updated = timeEntry.apply(digit: digit, to: sleepTimeValue(field))
+            if updated != sleepTimeValue(field) {
+                setDraftTime(updated, for: field)
+            }
+        }
+    }
+
+    private func sleepTimeValue(_ field: SleepTimeField) -> Int {
+        let minuteOfDay = field == .bedtime
+            ? draftBedtimeMinute ?? scheduleStore.bedtime.minuteOfDay
+            : draftWakeMinute ?? scheduleStore.wake.minuteOfDay
+        return Int(minuteOfDay.rounded()) % 1440
+    }
+
+    /// Commits a keypad-typed (or meridiem-toggled) time: the draft shows
+    /// it immediately and the matching timeline half glides over to it.
+    private func setDraftTime(_ minute: Int, for field: SleepTimeField) {
+        switch field {
+        case .bedtime:
+            draftBedtimeMinute = Double(minute)
+            bedtimeScroll = TimelineScrollCommand(
+                generation: bedtimeScroll.generation + 1,
+                minuteOfDay: Double(minute)
+            )
+        case .wake:
+            draftWakeMinute = Double(minute)
+            wakeScroll = TimelineScrollCommand(
+                generation: wakeScroll.generation + 1,
+                minuteOfDay: Double(minute)
+            )
+        }
+    }
+
+    private enum TimeSegment {
+        case hour, minutes
+    }
+
+    /// First tap anywhere on a time focuses it with the whole time
+    /// selected; further taps narrow onto the hour or minutes, and a tap
+    /// on the surrounding whitespace/colon re-selects the whole time.
+    private func tapTimeSegment(_ segment: TimeSegment?, in field: SleepTimeField) {
+        guard focusedTimeField == field else {
+            focusedTimeField = field
+            return
+        }
+        switch segment {
+        case .hour: timeEntry.selectHour()
+        case .minutes: timeEntry.selectMinutes()
+        case nil: timeEntry.selectAll()
+        }
+    }
+
+    /// While a time is focused its AM/PM is a toggle; unfocused it opens
+    /// the keypad like the rest of the time.
+    private func tapMeridiem(in field: SleepTimeField) {
+        guard focusedTimeField == field else {
+            focusedTimeField = field
+            return
+        }
+        setDraftTime((sleepTimeValue(field) + 720) % 1440, for: field)
     }
 
     /// Bedtime-to-wake span, wrapping midnight: "8 hrs 45 mins", "1 hr",
@@ -407,12 +578,16 @@ struct ContentView: View {
 
     private func sleepTimeSection(
         label: String,
+        field: SleepTimeField,
         minuteOfDay: Double,
+        tint: Color,
         alignment: HorizontalAlignment
     ) -> some View {
         let minute = Int(minuteOfDay.rounded()) % 1440
         let hour = minute / 60
         let hour12 = hour % 12 == 0 ? 12 : hour % 12
+        let isFocused = focusedTimeField == field
+        let allSelected = isFocused && timeEntry.selectsAll
 
         return VStack(alignment: alignment, spacing: 2) {
             Text(label)
@@ -420,13 +595,41 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             HStack(alignment: .lastTextBaseline, spacing: 4) {
-                Text("\(hour12):\(String(format: "%02d", minute % 60))")
-                    .font(.system(size: 34, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+                // The time splits into tappable hour/minute segments; the
+                // shared modifiers on the stack keep them rendering as one
+                // run of text.
+                HStack(spacing: 0) {
+                    Text("\(hour12)")
+                        .background {
+                            selectionHighlight(
+                                tint,
+                                on: isFocused && timeEntry.hourSelected
+                            )
+                        }
+                        .contentShape(.rect)
+                        .onTapGesture { tapTimeSegment(.hour, in: field) }
+                    Text(":")
+                    Text(String(format: "%02d", minute % 60))
+                        .background {
+                            selectionHighlight(
+                                tint,
+                                on: isFocused && timeEntry.minutesSelected
+                            )
+                        }
+                        .contentShape(.rect)
+                        .onTapGesture { tapTimeSegment(.minutes, in: field) }
+                }
+                .font(.system(size: 34, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .background { selectionHighlight(tint, on: allSelected) }
+                .contentShape(.rect)
+                .onTapGesture { tapTimeSegment(nil, in: field) }
                 Text(hour < 12 ? "AM" : "PM")
                     .font(.system(size: 20, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .contentShape(.rect)
+                    .onTapGesture { tapMeridiem(in: field) }
             }
             .foregroundStyle(.white)
             // Lay out at ideal width: the flexible half-width frame below
@@ -436,10 +639,25 @@ struct ContentView: View {
             .fixedSize()
         }
         .animation(.snappy(duration: 0.18), value: minute)
+        .animation(.easeOut(duration: 0.12), value: timeEntry)
+        .animation(.easeOut(duration: 0.12), value: focusedTimeField)
         .frame(
             maxWidth: .infinity,
             alignment: alignment == .leading ? .leading : .trailing
         )
+    }
+
+    /// The text-selection-style pill behind whichever part of a focused
+    /// time the next digit will overwrite. Negative padding grows it past
+    /// the glyphs without disturbing the text layout.
+    @ViewBuilder
+    private func selectionHighlight(_ tint: Color, on: Bool) -> some View {
+        if on {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(tint.opacity(0.35))
+                .padding(.horizontal, -3)
+                .padding(.vertical, -1)
+        }
     }
 
     /// In brightness mode the row is just the slider — power lives in a
@@ -641,14 +859,89 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    /// Mock preset palette: starts as a "Save Preset" pill; saving fills
+    /// it with dots and a trailing plus for adding more. Real preset
+    /// storage comes later.
     private var bottomBar: some View {
-        // Placeholder capsule; interactions coming next.
-        Color.clear
-            .frame(height: 56)
-            .frame(maxWidth: .infinity)
-            .glassEffect(.regular, in: .capsule)
-            .padding(.horizontal, 24 + 56 + 12)
-            .padding(.bottom, 24)
+        Group {
+            if presetCount == 0 {
+                Button {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
+                        presetCount = 1
+                        selectedPreset = 0
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "list.bullet.circle.fill")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(.gray)
+                        Text("Save Preset")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 22)
+                    .frame(height: 56)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack(spacing: 14) {
+                    // Framed like the plus so the dots sit visually
+                    // centered between the two glyphs.
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.gray)
+                        .frame(width: 32, height: 56)
+                        .contentShape(.rect)
+
+                    ForEach(0 ..< presetCount, id: \.self) { index in
+                        Button {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                selectedPreset = index
+                            }
+                        } label: {
+                            Circle()
+                                .fill(.white.opacity(0.35))
+                                .frame(width: 26, height: 26)
+                                // Selection ring floats with a gap of clear
+                                // space between it and the dot.
+                                .overlay {
+                                    if selectedPreset == index {
+                                        Circle()
+                                            .strokeBorder(.white, lineWidth: 1.5)
+                                            .frame(width: 34, height: 34)
+                                            .transition(
+                                                .scale(scale: 0.6)
+                                                    .combined(with: .opacity)
+                                            )
+                                    }
+                                }
+                                .contentShape(.circle)
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
+                    Button {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
+                            presetCount += 1
+                            selectedPreset = presetCount - 1
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.gray)
+                            .frame(width: 32, height: 56)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 56)
+            }
+        }
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 25))
+        .padding(.bottom, 24)
     }
 
     private func glassIconButton(
